@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>旅のサポートアプリ</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>旅のサポートアプリ</h1>
+    <div class="plan-bar">
+      <select id="plan-select" class="plan-select" aria-label="旅行プランの選択"></select>
+      <div class="plan-actions">
+        <button type="button" id="plan-create-btn" class="btn-header">＋新規プラン作成</button>
+        <button type="button" id="plan-rename-btn" class="btn-header">プラン名変更</button>
+        <button type="button" id="plan-delete-btn" class="btn-header btn-header-danger">プラン削除</button>
+      </div>
+    </div>
+    <div class="share-bar">
+      <span id="share-status-badge" class="share-badge">ローカル保存のみ</span>
+      <button type="button" id="plan-share-btn" class="btn-header btn-share-action">🔗 このプランを共有する</button>
+      <button type="button" id="plan-copy-url-btn" class="btn-header btn-share-action hidden">📋 共有用URLをコピー</button>
+      <button type="button" id="plan-sync-btn" class="btn-header hidden">🔄 最新同期</button>
+      <button type="button" id="cloud-config-btn" class="btn-header">⚙️ クラウド設定</button>
+    </div>
+  </header>
+
+  <!-- Supabase クラウド接続設定モーダル -->
+  <div id="cloud-config-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="cloud-config-title">
+    <div class="modal-card">
+      <h2 id="cloud-config-title">Supabase クラウド接続設定</h2>
+      <p class="modal-desc">
+        <code>app.js</code> 先頭の定数、または以下のフォームから Supabase の接続情報を設定できます（持ち物リストはクラウドへ送信されません）。
+      </p>
+      <form id="cloud-config-form" class="app-form">
+        <div class="form-group">
+          <label for="supabase-url-input">SUPABASE_URL</label>
+          <input type="url" id="supabase-url-input" placeholder="https://xxxx.supabase.co">
+        </div>
+        <div class="form-group">
+          <label for="supabase-key-input">SUPABASE_ANON_KEY</label>
+          <input type="text" id="supabase-key-input" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6...">
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn-primary">設定を保存</button>
+          <button type="button" id="cloud-config-close-btn" class="btn-secondary">閉じる</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <nav class="tab-nav" role="tablist">
+    <button class="tab-button active" data-tab="itinerary" role="tab" aria-selected="true">
+      1. 旅のしおり
+    </button>
+    <button class="tab-button" data-tab="expenses" role="tab" aria-selected="false">
+      2. 旅費・割り勘
+    </button>
+    <button class="tab-button" data-tab="lists" role="tab" aria-selected="false">
+      3. 持ち物＆場所
+    </button>
+  </nav>
+
+  <main class="app-main">
+    <!-- タブ1: 旅のしおり -->
+    <section id="tab-itinerary" class="tab-content active" role="tabpanel">
+      <h2>旅のしおり（時間ごとの予定）</h2>
+      <form id="itinerary-form" class="app-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="itinerary-day">日程</label>
+            <input type="date" id="itinerary-day" required>
+          </div>
+          <div class="form-group">
+            <label for="itinerary-time">時刻</label>
+            <input type="time" id="itinerary-time" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="itinerary-title">予定タイトル</label>
+          <input type="text" id="itinerary-title" placeholder="例: 東京駅集合・新幹線出発" required>
+        </div>
+        <div class="form-group">
+          <label for="itinerary-memo">メモ（任意）</label>
+          <input type="text" id="itinerary-memo" placeholder="例: のぞみ21号 9号車">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="itinerary-place">場所・マップ（任意）</label>
+            <input type="text" id="itinerary-place" placeholder="例: 東京駅 / 兼六園">
+          </div>
+          <div class="form-group">
+            <label for="itinerary-url">参考URL（任意）</label>
+            <input type="url" id="itinerary-url" placeholder="例: https://example.com">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="submit" id="itinerary-submit-btn" class="btn-primary">予定を追加</button>
+          <button type="button" id="itinerary-cancel-btn" class="btn-secondary hidden">キャンセル</button>
+        </div>
+      </form>
+
+      <div id="itinerary-list" class="itinerary-list"></div>
+    </section>
+
+    <!-- タブ2: 旅費・割り勘計算 -->
+    <section id="tab-expenses" class="tab-content" role="tabpanel">
+      <h2>旅費・割り勘計算</h2>
+
+      <!-- 参加メンバー管理 -->
+      <div class="sub-section">
+        <h3>参加メンバー</h3>
+        <form id="member-form" class="inline-form">
+          <input type="text" id="member-name" placeholder="メンバー名を入力（例: 田中）" required>
+          <button type="submit" class="btn-primary">追加</button>
+        </form>
+        <div id="member-list" class="member-tags"></div>
+      </div>
+
+      <!-- 外貨換算レート設定 -->
+      <div class="sub-section">
+        <h3>外貨レート設定（1通貨あたりの日本円）</h3>
+        <div id="rate-settings" class="rate-grid">
+          <div class="rate-item">
+            <label for="rate-KRW">1 KRW (ウォン)</label>
+            <div class="rate-input-wrap">
+              <input type="number" id="rate-KRW" data-currency="KRW" min="0.0001" step="any" value="0.11">
+              <span>円</span>
+            </div>
+          </div>
+          <div class="rate-item">
+            <label for="rate-USD">1 USD (米ドル)</label>
+            <div class="rate-input-wrap">
+              <input type="number" id="rate-USD" data-currency="USD" min="0.0001" step="any" value="150">
+              <span>円</span>
+            </div>
+          </div>
+          <div class="rate-item">
+            <label for="rate-EUR">1 EUR (ユーロ)</label>
+            <div class="rate-input-wrap">
+              <input type="number" id="rate-EUR" data-currency="EUR" min="0.0001" step="any" value="160">
+              <span>円</span>
+            </div>
+          </div>
+          <div class="rate-item">
+            <label for="rate-TWD">1 TWD (台湾ドル)</label>
+            <div class="rate-input-wrap">
+              <input type="number" id="rate-TWD" data-currency="TWD" min="0.0001" step="any" value="4.8">
+              <span>円</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 支出登録フォーム -->
+      <div class="sub-section">
+        <h3>支出の登録</h3>
+        <form id="expense-form" class="app-form">
+          <div class="form-group">
+            <label for="expense-title">内容</label>
+            <input type="text" id="expense-title" placeholder="例: レンタカー代 / 焼肉ディナー" required>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="expense-amount">金額</label>
+              <input type="number" id="expense-amount" min="0.01" step="any" placeholder="例: 30000" required>
+            </div>
+            <div class="form-group">
+              <label for="expense-currency">通貨</label>
+              <select id="expense-currency">
+                <option value="JPY">JPY（日本円）</option>
+                <option value="KRW">KRW（ウォン）</option>
+                <option value="USD">USD（米ドル）</option>
+                <option value="EUR">EUR（ユーロ）</option>
+                <option value="TWD">TWD（台湾ドル）</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="expense-payer">支払った人</label>
+            <select id="expense-payer" required>
+              <option value="">メンバーを先に追加してください</option>
+            </select>
+          </div>
+          <div class="form-actions">
+            <button type="submit" id="expense-submit-btn" class="btn-primary">支出を追加</button>
+            <button type="button" id="expense-cancel-btn" class="btn-secondary hidden">キャンセル</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- 割り勘・精算サマリー -->
+      <div class="sub-section">
+        <h3>割り勘・精算結果</h3>
+        <div id="expense-summary" class="expense-summary"></div>
+      </div>
+
+      <!-- 支出履歴 -->
+      <div class="sub-section">
+        <h3>支出履歴</h3>
+        <div id="expense-list" class="expense-list"></div>
+      </div>
+    </section>
+
+    <!-- タブ3: 持ち物＆行きたい場所リスト -->
+    <section id="tab-lists" class="tab-content" role="tabpanel">
+      <h2>持ち物＆行きたい場所リスト</h2>
+
+      <div class="lists-grid">
+        <!-- 持ち物リスト -->
+        <div class="sub-section">
+          <h3>持ち物リスト</h3>
+
+          <!-- デフォルト持ち物の一括追加＆テンプレート管理 -->
+          <div class="packing-preset-box">
+            <div class="packing-preset-controls">
+              <div class="packing-nights-group">
+                <label for="packing-nights">宿泊日数</label>
+                <div class="packing-nights-input-wrap">
+                  <input type="number" id="packing-nights" min="0" max="99" step="1" value="1">
+                  <span>泊</span>
+                </div>
+              </div>
+              <label class="packing-overseas-label">
+                <input type="checkbox" id="packing-overseas">
+                <span>海外旅行アイテムも含める</span>
+              </label>
+              <button type="button" id="packing-auto-add-btn" class="btn-primary">基本の持ち物を自動追加</button>
+            </div>
+            <div class="packing-template-Launcher">
+              <button type="button" id="packing-template-toggle-btn" class="btn-secondary btn-sm">
+                デフォルト持ち物の編集（テンプレート管理）
+              </button>
+            </div>
+
+            <!-- テンプレート管理パネル（開閉式） -->
+            <div id="packing-template-panel" class="packing-template-panel hidden">
+              <h4>デフォルト持ち物テンプレートの編集</h4>
+              <form id="packing-template-form" class="app-form template-add-form">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="template-category">追加先カテゴリ</label>
+                    <select id="template-category">
+                      <option value="always">A. 0泊以上（常に追加）</option>
+                      <option value="perNight">B-1. 1泊以上（×〇日分）</option>
+                      <option value="perNightPlusOne">B-2. 1泊以上（×〇＋1日分）</option>
+                      <option value="stayFixed">C. 1泊以上（1セット固定）</option>
+                      <option value="overseas">D. 海外旅行のみ追加</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label for="template-item-name">アイテム名</label>
+                    <input type="text" id="template-item-name" placeholder="例: 折りたたみ傘" required>
+                  </div>
+                </div>
+                <button type="submit" class="btn-primary">テンプレートに追加</button>
+              </form>
+              <div id="packing-template-list" class="packing-template-list"></div>
+            </div>
+          </div>
+
+          <form id="packing-form" class="inline-form">
+            <input type="text" id="packing-input" placeholder="例: モバイルバッテリー" required>
+            <button type="submit" class="btn-primary">追加</button>
+          </form>
+          <div id="packing-list" class="checklist"></div>
+        </div>
+
+        <!-- 行きたい場所リスト -->
+        <div class="sub-section">
+          <h3>行きたい場所リスト</h3>
+          <form id="places-form" class="app-form">
+            <div class="form-group">
+              <label for="place-name">スポット名</label>
+              <input type="text" id="place-name" placeholder="例: 兼六園" required>
+            </div>
+            <div class="form-group">
+              <label for="place-memo">メモ（任意）</label>
+              <input type="text" id="place-memo" placeholder="例: 朝8時から開園">
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="place-location">場所・マップ（任意・未入力ならスポット名で検索）</label>
+                <input type="text" id="place-location" placeholder="例: 石川県金沢市兼六町1">
+              </div>
+              <div class="form-group">
+                <label for="place-url">参考URL（任意）</label>
+                <input type="url" id="place-url" placeholder="例: https://example.com">
+              </div>
+            </div>
+            <div class="form-actions">
+              <button type="submit" id="place-submit-btn" class="btn-primary">場所を追加</button>
+              <button type="button" id="place-cancel-btn" class="btn-secondary hidden">キャンセル</button>
+            </div>
+          </form>
+          <div id="places-list" class="checklist"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="app.js"></script>
+</body>
+</html>
