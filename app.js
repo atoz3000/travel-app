@@ -828,10 +828,15 @@ function initExpenses() {
   const memberListEl = document.getElementById('member-list');
 
   const expenseForm = document.getElementById('expense-form');
+  const expenseTypeSelect = document.getElementById('expense-type');
   const expenseTitleInput = document.getElementById('expense-title');
   const expenseAmountInput = document.getElementById('expense-amount');
   const expenseCurrencySelect = document.getElementById('expense-currency');
   const expensePayerSelect = document.getElementById('expense-payer');
+  const expenseSplitGroup = document.getElementById('expense-split-group');
+  const expenseSplitMembersEl = document.getElementById('expense-split-members');
+  const expenseDirectGroup = document.getElementById('expense-direct-group');
+  const expenseBeneficiarySelect = document.getElementById('expense-beneficiary');
   const expenseSubmitBtn = document.getElementById('expense-submit-btn');
   const expenseCancelBtn = document.getElementById('expense-cancel-btn');
   const rateInputs = document.querySelectorAll('#rate-settings input[data-currency]');
@@ -851,6 +856,16 @@ function initExpenses() {
   let rates = { ...DEFAULT_RATES, ...loadPlanData(STORAGE_KEYS.RATES, {}) };
   let editingExpenseId = null;
 
+  function updateExpenseModeUI() {
+    const isDirect = expenseTypeSelect.value === 'direct';
+    expenseSplitGroup.classList.toggle('hidden', isDirect);
+    expenseDirectGroup.classList.toggle('hidden', !isDirect);
+  }
+
+  expenseTypeSelect.addEventListener('change', () => {
+    updateExpenseModeUI();
+  });
+
   // 外貨額と通貨コードから日本円換算額（端数切り捨て）を算出するヘルパー
   function convertToJpy(originalAmount, currency) {
     const num = Number(originalAmount) || 0;
@@ -868,6 +883,7 @@ function initExpenses() {
       const originalAmount = item.originalAmount !== undefined ? Number(item.originalAmount) : Number(item.amount);
       return {
         ...item,
+        type: item.type || 'split',
         currency,
         originalAmount,
         amount: convertToJpy(originalAmount, currency),
@@ -904,16 +920,34 @@ function initExpenses() {
   renderRateInputs();
   syncExpenseAmounts();
 
+  function setSplitMemberChecks(targetMembers) {
+    const checkboxes = expenseSplitMembersEl.querySelectorAll('input[type="checkbox"]');
+    const targetSet = Array.isArray(targetMembers) ? new Set(targetMembers) : null;
+    checkboxes.forEach((cb) => {
+      cb.checked = targetSet ? targetSet.has(cb.value) : true;
+    });
+  }
+
+  function getCheckedSplitMembers() {
+    const checkboxes = expenseSplitMembersEl.querySelectorAll('input[type="checkbox"]:checked');
+    return Array.from(checkboxes).map((cb) => cb.value);
+  }
+
   function resetExpenseEditMode() {
     editingExpenseId = null;
+    expenseTypeSelect.value = 'split';
+    updateExpenseModeUI();
     expenseCurrencySelect.value = 'JPY';
+    setSplitMemberChecks(null);
     expenseSubmitBtn.textContent = '支出を追加';
     expenseCancelBtn.classList.add('hidden');
   }
 
-  function renderMembers() {
+  function renderMembers(checkedSplitList = null) {
     memberListEl.innerHTML = '';
     expensePayerSelect.innerHTML = '';
+    expenseBeneficiarySelect.innerHTML = '';
+    expenseSplitMembersEl.innerHTML = '';
 
     if (members.length === 0) {
       const emptyMsg = document.createElement('span');
@@ -921,14 +955,26 @@ function initExpenses() {
       emptyMsg.textContent = '参加メンバーを追加してください。';
       memberListEl.appendChild(emptyMsg);
 
-      const opt = document.createElement('option');
-      opt.value = '';
-      opt.textContent = 'メンバーを先に追加してください';
-      expensePayerSelect.appendChild(opt);
+      const opt1 = document.createElement('option');
+      opt1.value = '';
+      opt1.textContent = 'メンバーを先に追加してください';
+      expensePayerSelect.appendChild(opt1);
+
+      const opt2 = document.createElement('option');
+      opt2.value = '';
+      opt2.textContent = 'メンバーを先に追加してください';
+      expenseBeneficiarySelect.appendChild(opt2);
+
+      const emptySplit = document.createElement('span');
+      emptySplit.className = 'placeholder-text';
+      emptySplit.textContent = 'メンバーを先に追加してください';
+      expenseSplitMembersEl.appendChild(emptySplit);
       return;
     }
 
-    members.forEach((member) => {
+    const checkedSet = Array.isArray(checkedSplitList) ? new Set(checkedSplitList) : null;
+
+    members.forEach((member, idx) => {
       const tag = document.createElement('span');
       tag.className = 'member-tag';
       tag.textContent = member;
@@ -946,31 +992,62 @@ function initExpenses() {
       tag.appendChild(removeBtn);
       memberListEl.appendChild(tag);
 
-      const opt = document.createElement('option');
-      opt.value = member;
-      opt.textContent = member;
-      expensePayerSelect.appendChild(opt);
+      const payerOpt = document.createElement('option');
+      payerOpt.value = member;
+      payerOpt.textContent = member;
+      expensePayerSelect.appendChild(payerOpt);
+
+      const benOpt = document.createElement('option');
+      benOpt.value = member;
+      benOpt.textContent = member;
+      if (idx === 1) benOpt.selected = true;
+      expenseBeneficiarySelect.appendChild(benOpt);
+
+      const checkLabel = document.createElement('label');
+      checkLabel.className = 'split-member-label';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = member;
+      cb.checked = checkedSet ? checkedSet.has(member) : true;
+      const span = document.createElement('span');
+      span.textContent = member;
+      checkLabel.appendChild(cb);
+      checkLabel.appendChild(span);
+      expenseSplitMembersEl.appendChild(checkLabel);
     });
   }
 
   function renderSummary() {
     summaryEl.innerHTML = '';
 
-    const total = expenses.reduce((sum, e) => sum + Number(e.amount), 0);
+    const splitExpenses = expenses.filter((e) => (e.type || 'split') === 'split');
+    const directExpenses = expenses.filter((e) => e.type === 'direct');
+
+    const splitTotal = splitExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
+    const directTotal = directExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
     const memberCount = members.length;
-    const perPerson = memberCount > 0 ? Math.round(total / memberCount) : 0;
+    const perPerson = memberCount > 0 ? Math.round(splitTotal / memberCount) : 0;
 
     const totalsDiv = document.createElement('div');
     totalsDiv.className = 'summary-totals';
     totalsDiv.innerHTML = `
       <div class="summary-stat">
-        <span class="summary-stat-label">合計支出</span>
-        <span class="summary-stat-value">${total.toLocaleString()} 円</span>
+        <span class="summary-stat-label">共通旅費（割り勘合計）</span>
+        <span class="summary-stat-value">${splitTotal.toLocaleString()} 円</span>
       </div>
       <div class="summary-stat">
-        <span class="summary-stat-label">1人あたり（${memberCount}人）</span>
+        <span class="summary-stat-label">1人あたり目安（${memberCount}人）</span>
         <span class="summary-stat-value">${perPerson.toLocaleString()} 円</span>
       </div>
+      ${
+        directTotal > 0
+          ? `
+      <div class="summary-stat">
+        <span class="summary-stat-label">個別立替合計（割り勘対象外）</span>
+        <span class="summary-stat-value">${directTotal.toLocaleString()} 円</span>
+      </div>`
+          : ''
+      }
     `;
     summaryEl.appendChild(totalsDiv);
 
@@ -982,25 +1059,54 @@ function initExpenses() {
       return;
     }
 
-    // メンバーごとの立替合計を計算
-    const paidByMember = {};
+    // メンバーごとの純貸借バランス（＋は受取側、－は支払側）を計算
+    const netBalance = {};
     members.forEach((m) => {
-      paidByMember[m] = 0;
+      netBalance[m] = 0;
     });
+
     expenses.forEach((e) => {
-      if (paidByMember[e.payer] !== undefined) {
-        paidByMember[e.payer] += Number(e.amount);
+      const amt = Number(e.amount) || 0;
+      if (amt <= 0) return;
+
+      if (e.type === 'direct') {
+        // 特定メンバー間の立替：全体の均等割り勘には含めず、当事者間の貸借へダイレクトに反映
+        if (e.payer && e.beneficiary && e.payer !== e.beneficiary) {
+          if (netBalance[e.payer] !== undefined) {
+            netBalance[e.payer] += amt;
+          }
+          if (netBalance[e.beneficiary] !== undefined) {
+            netBalance[e.beneficiary] -= amt;
+          }
+        }
+      } else {
+        // 通常の割り勘（全員または選択された対象メンバー間で均等割り）
+        const validTargets =
+          Array.isArray(e.splitMembers) && e.splitMembers.length > 0
+            ? e.splitMembers.filter((m) => members.includes(m))
+            : [...members];
+
+        if (validTargets.length > 0) {
+          if (netBalance[e.payer] !== undefined) {
+            netBalance[e.payer] += amt;
+          }
+          const share = Math.round(amt / validTargets.length);
+          validTargets.forEach((tm) => {
+            if (netBalance[tm] !== undefined) {
+              netBalance[tm] -= share;
+            }
+          });
+        }
       }
     });
 
-    // 差額（支払額 - 1人あたり負担額）から精算ペアを算出
-    const creditors = []; // 多く払った人（受け取る側）
-    const debtors = [];   // 少なく払った人（支払う側）
+    const creditors = []; // 受け取る側（＋）
+    const debtors = [];   // 支払う側（－）
 
     members.forEach((m) => {
-      const diff = paidByMember[m] - perPerson;
-      if (diff > 0) creditors.push({ name: m, amount: diff });
-      else if (diff < 0) debtors.push({ name: m, amount: -diff });
+      const bal = netBalance[m];
+      if (bal > 0) creditors.push({ name: m, amount: bal });
+      else if (bal < 0) debtors.push({ name: m, amount: -bal });
     });
 
     const settlements = [];
@@ -1022,7 +1128,7 @@ function initExpenses() {
     if (settlements.length === 0) {
       const li = document.createElement('li');
       li.className = 'placeholder-text';
-      li.textContent = '全員の支払額が均等です（精算不要）。';
+      li.textContent = '全員の貸借が均等です（精算不要）。';
       list.appendChild(li);
     } else {
       settlements.forEach((text) => {
@@ -1055,11 +1161,30 @@ function initExpenses() {
 
       const titleEl = document.createElement('div');
       titleEl.className = 'expense-title';
-      titleEl.textContent = item.title;
+
+      const isDirect = item.type === 'direct';
+      if (isDirect) {
+        const badge = document.createElement('span');
+        badge.className = 'expense-badge-direct';
+        badge.textContent = '個別立替';
+        titleEl.appendChild(badge);
+      }
+      titleEl.appendChild(document.createTextNode(item.title));
 
       const metaEl = document.createElement('div');
       metaEl.className = 'expense-meta';
-      metaEl.textContent = `支払: ${item.payer}`;
+      if (isDirect) {
+        metaEl.textContent = `立替: ${item.payer} → 相手: ${item.beneficiary || ''}（割り勘対象外）`;
+      } else {
+        const targets =
+          Array.isArray(item.splitMembers) && item.splitMembers.length > 0
+            ? item.splitMembers
+            : members;
+        const isPartial = targets.length > 0 && targets.length < members.length;
+        metaEl.textContent = isPartial
+          ? `支払: ${item.payer}（割り勘対象: ${targets.join('・')}）`
+          : `支払: ${item.payer}（全員で割り勘）`;
+      }
 
       info.appendChild(titleEl);
       info.appendChild(metaEl);
@@ -1089,9 +1214,12 @@ function initExpenses() {
       editBtn.textContent = '編集';
       editBtn.addEventListener('click', () => {
         editingExpenseId = item.id;
+        expenseTypeSelect.value = item.type || 'split';
+        updateExpenseModeUI();
         expenseTitleInput.value = item.title;
         expenseAmountInput.value = origAmt;
         expenseCurrencySelect.value = currency;
+
         if (!members.includes(item.payer)) {
           const tempOpt = document.createElement('option');
           tempOpt.value = item.payer;
@@ -1099,6 +1227,19 @@ function initExpenses() {
           expensePayerSelect.appendChild(tempOpt);
         }
         expensePayerSelect.value = item.payer;
+
+        if (item.type === 'direct' && item.beneficiary) {
+          if (!members.includes(item.beneficiary)) {
+            const tempBenOpt = document.createElement('option');
+            tempBenOpt.value = item.beneficiary;
+            tempBenOpt.textContent = item.beneficiary;
+            expenseBeneficiarySelect.appendChild(tempBenOpt);
+          }
+          expenseBeneficiarySelect.value = item.beneficiary;
+        } else {
+          setSplitMemberChecks(item.splitMembers || null);
+        }
+
         expenseSubmitBtn.textContent = '支出を更新';
         expenseCancelBtn.classList.remove('hidden');
         expenseForm.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1132,7 +1273,11 @@ function initExpenses() {
 
   function renderAll() {
     const currentPayer = expensePayerSelect.value;
-    renderMembers();
+    const currentBeneficiary = expenseBeneficiarySelect.value;
+    const currentChecked = editingExpenseId ? getCheckedSplitMembers() : null;
+
+    renderMembers(currentChecked);
+
     if (editingExpenseId && currentPayer) {
       if (!members.includes(currentPayer)) {
         const tempOpt = document.createElement('option');
@@ -1141,6 +1286,15 @@ function initExpenses() {
         expensePayerSelect.appendChild(tempOpt);
       }
       expensePayerSelect.value = currentPayer;
+    }
+    if (editingExpenseId && currentBeneficiary) {
+      if (!members.includes(currentBeneficiary)) {
+        const tempBenOpt = document.createElement('option');
+        tempBenOpt.value = currentBeneficiary;
+        tempBenOpt.textContent = currentBeneficiary;
+        expenseBeneficiarySelect.appendChild(tempBenOpt);
+      }
+      expenseBeneficiarySelect.value = currentBeneficiary;
     }
     renderSummary();
     renderExpenses();
@@ -1164,6 +1318,7 @@ function initExpenses() {
 
   expenseForm.addEventListener('submit', (e) => {
     e.preventDefault();
+    const type = expenseTypeSelect.value || 'split';
     const title = expenseTitleInput.value.trim();
     const originalAmount = Number(expenseAmountInput.value);
     const currency = expenseCurrencySelect.value || 'JPY';
@@ -1171,24 +1326,49 @@ function initExpenses() {
 
     if (!title || !originalAmount || !payer) return;
 
+    let beneficiary = null;
+    let splitMembers = null;
+
+    if (type === 'direct') {
+      beneficiary = expenseBeneficiarySelect.value;
+      if (!beneficiary) return;
+      if (beneficiary === payer) {
+        window.alert('「支払った人」と「立て替えてもらった人」には別々のメンバーを選択してください。');
+        return;
+      }
+    } else {
+      const checked = getCheckedSplitMembers();
+      if (checked.length === 0) {
+        window.alert('割り勘対象のメンバーを1人以上選択してください。');
+        return;
+      }
+      splitMembers = checked;
+    }
+
     const amount = convertToJpy(originalAmount, currency);
+
+    const recordData = {
+      type,
+      title,
+      amount,
+      originalAmount,
+      currency,
+      payer,
+      beneficiary,
+      splitMembers,
+    };
 
     if (editingExpenseId) {
       expenses = expenses.map((item) =>
-        item.id === editingExpenseId
-          ? { ...item, title, amount, originalAmount, currency, payer }
-          : item
+        item.id === editingExpenseId ? { ...item, ...recordData } : item
       );
       resetExpenseEditMode();
     } else {
       expenses.push({
         id: Date.now().toString(),
-        title,
-        amount,
-        originalAmount,
-        currency,
-        payer,
+        ...recordData,
       });
+      setSplitMemberChecks(null);
     }
 
     savePlanData(STORAGE_KEYS.EXPENSES, expenses);

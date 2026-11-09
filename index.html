@@ -158,8 +158,15 @@
         <h3>支出の登録</h3>
         <form id="expense-form" class="app-form">
           <div class="form-group">
+            <label for="expense-type">精算モード</label>
+            <select id="expense-type">
+              <option value="split">全員（または選択メンバー）で割り勘</option>
+              <option value="direct">特定メンバー間の立替（個別精算）</option>
+            </select>
+          </div>
+          <div class="form-group">
             <label for="expense-title">内容</label>
-            <input type="text" id="expense-title" placeholder="例: レンタカー代 / 焼肉ディナー" required>
+            <input type="text" id="expense-title" placeholder="例: レンタカー代 / Bさんの現金立替" required>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -178,8 +185,20 @@
             </div>
           </div>
           <div class="form-group">
-            <label for="expense-payer">支払った人</label>
+            <label for="expense-payer">支払った人（立て替えた人）</label>
             <select id="expense-payer" required>
+              <option value="">メンバーを先に追加してください</option>
+            </select>
+          </div>
+          <!-- 割り勘モード時：対象メンバー選択（割り勘対象外のチェック解除） -->
+          <div id="expense-split-group" class="form-group">
+            <label>割り勘対象メンバー（対象外の人はチェックを外す）</label>
+            <div id="expense-split-members" class="split-members-checks"></div>
+          </div>
+          <!-- 個別立替モード時：立て替えてもらった人（相手）の選択 -->
+          <div id="expense-direct-group" class="form-group hidden">
+            <label for="expense-beneficiary">立て替えてもらった人（返済する相手）</label>
+            <select id="expense-beneficiary">
               <option value="">メンバーを先に追加してください</option>
             </select>
           </div>
