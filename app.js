@@ -1,8 +1,10 @@
 // ==========================================
-// Supabase 接続設定（デフォルト値として設定済み・画面の「⚙️ クラウド設定」から変更も可能）
+// Supabase 接続設定（デフォルト値として強制優先設定）
 // ==========================================
-const SUPABASE_URL = 'https://mjqpebujmssoiqmcunfu.supabase.co'.trim();
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1qcXBlYnVqbXNzb2lxbWN1bmZ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0NTIyMTYsImV4cCI6MjEwOTAyODIxNn0.PQhsl9Re-7aeFUO-OhHLwql3hoUgPh3Nmx70KDNTdSk'.trim();
+const DEFAULT_SUPABASE_URL = 'https://mjqpebujmssoiqmcunfu.supabase.co'.trim();
+const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1qcXBlYnVqbXNzb2lxbWN1bmZ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0NTIyMTYsImV4cCI6MjEwOTAyODIxNn0.PQhsl9Re-7aeFUO-OhHLwql3hoUgPh3Nmx70KDNTdSk'.trim();
+const SUPABASE_URL = DEFAULT_SUPABASE_URL;
+const SUPABASE_ANON_KEY = DEFAULT_SUPABASE_ANON_KEY;
 
 // ストレージキー定義（将来のクラウド移行時もデータ構造を把握しやすいよう集約）
 const STORAGE_KEYS = {
@@ -142,14 +144,28 @@ function initPlans(onPlanChange) {
     localStorage.setItem(STORAGE_KEYS.ACTIVE_PLAN_ID, currentPlanId);
   }
 
-  // Supabase 接続情報の取得（localStorage の有効な設定値 または コード先頭のデフォルト定数）
+  // 起動時に古い localStorage のクラウド設定が残って Invalid API key になるのを防ぐためクリア
+  localStorage.removeItem(STORAGE_KEYS.SUPABASE_CONFIG);
+
+  // Supabase 接続情報の取得（コード先頭のデフォルト定数を強制的に優先して使用）
   function getSupabaseCredentials() {
     const savedCfg = loadData(STORAGE_KEYS.SUPABASE_CONFIG, {}) || {};
     const savedUrl = typeof savedCfg.url === 'string' ? savedCfg.url.trim() : '';
     const savedKey = typeof savedCfg.anonKey === 'string' ? savedCfg.anonKey.trim() : '';
-    const url = (savedUrl || SUPABASE_URL || '').trim();
-    const key = (savedKey || SUPABASE_ANON_KEY || '').trim();
+    const url = (SUPABASE_URL || savedUrl || '').trim();
+    const key = (SUPABASE_ANON_KEY || savedKey || '').trim();
     return { url, key };
+  }
+
+  // デフォルト定数で強制的にクライアントを再生成するヘルパー
+  function resetToDefaultSupabaseClient() {
+    localStorage.removeItem(STORAGE_KEYS.SUPABASE_CONFIG);
+    supabaseClient = null;
+    if (!window.supabase || typeof window.supabase.createClient !== 'function') {
+      return null;
+    }
+    supabaseClient = window.supabase.createClient(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_ANON_KEY);
+    return supabaseClient;
   }
 
   // Supabase クライアントの初期化・取得
@@ -218,14 +234,14 @@ function initPlans(onPlanChange) {
     const plan = plans.find((p) => p.id === planId);
     if (!plan || !plan.shareId) return false;
 
-    const client = getSupabaseClient();
+    let client = getSupabaseClient();
     if (!client) return false;
 
     const nowIso = new Date().toISOString();
     lastSyncedUpdatedAt = nowIso;
     const payload = buildSharedPlanPayload(planId);
 
-    const { error } = await client
+    let { error } = await client
       .from('shared_plans')
       .upsert(
         {
@@ -235,6 +251,23 @@ function initPlans(onPlanChange) {
         },
         { onConflict: 'share_id' }
       );
+
+    if (error && /invalid api key/i.test(error.message || '')) {
+      client = resetToDefaultSupabaseClient();
+      if (client) {
+        const retryRes = await client
+          .from('shared_plans')
+          .upsert(
+            {
+              share_id: plan.shareId,
+              plan_data: payload,
+              updated_at: nowIso,
+            },
+            { onConflict: 'share_id' }
+          );
+        error = retryRes.error;
+      }
+    }
 
     if (error) {
       console.error('Supabaseへの保存に失敗しました:', error);
@@ -246,16 +279,29 @@ function initPlans(onPlanChange) {
   // Supabase shared_plans テーブルから指定 share_id の最新データを取得（Pull）
   async function pullPlanFromCloud(shareId) {
     const cleanShareId = (shareId || '').trim();
-    const client = getSupabaseClient();
+    let client = getSupabaseClient();
     if (!client || !cleanShareId) {
       return { data: null, error: new Error('Supabaseクライアントが未初期化、またはshare_idが空です。') };
     }
 
-    const { data, error } = await client
+    let { data, error } = await client
       .from('shared_plans')
       .select('share_id, plan_data, updated_at')
       .eq('share_id', cleanShareId)
       .maybeSingle();
+
+    if (error && /invalid api key/i.test(error.message || '')) {
+      client = resetToDefaultSupabaseClient();
+      if (client) {
+        const retryRes = await client
+          .from('shared_plans')
+          .select('share_id, plan_data, updated_at')
+          .eq('share_id', cleanShareId)
+          .maybeSingle();
+        data = retryRes.data;
+        error = retryRes.error;
+      }
+    }
 
     if (error) {
       console.error('Supabaseからのデータ取得に失敗しました:', error);
