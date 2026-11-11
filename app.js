@@ -1,8 +1,8 @@
 // ==========================================
-// Supabase 接続設定（直接ここに記述するか、画面の「⚙️ クラウド設定」から登録可能）
+// Supabase 接続設定（デフォルト値として設定済み・画面の「⚙️ クラウド設定」から変更も可能）
 // ==========================================
-const SUPABASE_URL = '';
-const SUPABASE_ANON_KEY = '';
+const SUPABASE_URL = 'https://mjqpebujmssoiqmcunfu.supabase.co'.trim();
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1qcXBlYnVqbXNzb2lxbWN1bmZ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0NTIyMTYsImV4cCI6MjEwOTAyODIxNn0.PQhsl9Re-7aeFUO-OhHLwql3hoUgPh3Nmx70KDNTdSk'.trim();
 
 // ストレージキー定義（将来のクラウド移行時もデータ構造を把握しやすいよう集約）
 const STORAGE_KEYS = {
@@ -142,11 +142,13 @@ function initPlans(onPlanChange) {
     localStorage.setItem(STORAGE_KEYS.ACTIVE_PLAN_ID, currentPlanId);
   }
 
-  // Supabase 接続情報の取得（コード先頭の定数 または localStorage 設定値）
+  // Supabase 接続情報の取得（localStorage の有効な設定値 または コード先頭のデフォルト定数）
   function getSupabaseCredentials() {
-    const savedCfg = loadData(STORAGE_KEYS.SUPABASE_CONFIG, {});
-    const url = (SUPABASE_URL || savedCfg.url || '').trim();
-    const key = (SUPABASE_ANON_KEY || savedCfg.anonKey || '').trim();
+    const savedCfg = loadData(STORAGE_KEYS.SUPABASE_CONFIG, {}) || {};
+    const savedUrl = typeof savedCfg.url === 'string' ? savedCfg.url.trim() : '';
+    const savedKey = typeof savedCfg.anonKey === 'string' ? savedCfg.anonKey.trim() : '';
+    const url = (savedUrl || SUPABASE_URL || '').trim();
+    const key = (savedKey || SUPABASE_ANON_KEY || '').trim();
     return { url, key };
   }
 
@@ -243,20 +245,22 @@ function initPlans(onPlanChange) {
 
   // Supabase shared_plans テーブルから指定 share_id の最新データを取得（Pull）
   async function pullPlanFromCloud(shareId) {
+    const cleanShareId = (shareId || '').trim();
     const client = getSupabaseClient();
-    if (!client || !shareId) return null;
+    if (!client || !cleanShareId) {
+      return { data: null, error: new Error('Supabaseクライアントが未初期化、またはshare_idが空です。') };
+    }
 
     const { data, error } = await client
       .from('shared_plans')
       .select('share_id, plan_data, updated_at')
-      .eq('share_id', shareId)
+      .eq('share_id', cleanShareId)
       .maybeSingle();
 
     if (error) {
       console.error('Supabaseからのデータ取得に失敗しました:', error);
-      return null;
     }
-    return data;
+    return { data, error };
   }
 
   // 共有中プランの Realtime 購読を切り替え
@@ -336,7 +340,7 @@ function initPlans(onPlanChange) {
     const currentPlan = plans.find((p) => p.id === currentPlanId);
     if (!currentPlan || !currentPlan.shareId) return;
 
-    const row = await pullPlanFromCloud(currentPlan.shareId);
+    const { data: row } = await pullPlanFromCloud(currentPlan.shareId);
     if (row && row.plan_data) {
       lastSyncedUpdatedAt = row.updated_at || null;
       applySharedPlanPayload(currentPlan.id, row.plan_data);
@@ -473,22 +477,24 @@ function initPlans(onPlanChange) {
     cloudModal.classList.add('hidden');
   });
 
-  cloudForm.addEventListener('submit', (e) => {
+  cloudForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const url = supabaseUrlInput.value.trim();
     const anonKey = supabaseKeyInput.value.trim();
     saveData(STORAGE_KEYS.SUPABASE_CONFIG, { url, anonKey });
     supabaseClient = null;
     cloudModal.classList.add('hidden');
-    handleShareUrlParameter().then(() => {
-      syncActivePlanIfShared();
-    });
+    await handleShareUrlParameter();
+    await syncActivePlanIfShared();
   });
 
   // URLパラメータ (?share=〇〇) で開かれた場合の自動取り込み処理
   async function handleShareUrlParameter() {
     const params = new URLSearchParams(window.location.search);
-    const shareParam = params.get('share');
+    const rawShareParam = params.get('share');
+    if (!rawShareParam) return;
+
+    const shareParam = rawShareParam.trim();
     if (!shareParam) return;
 
     const client = getSupabaseClient();
@@ -498,9 +504,10 @@ function initPlans(onPlanChange) {
       return;
     }
 
-    const row = await pullPlanFromCloud(shareParam);
-    if (!row || !row.plan_data) {
-      window.alert('指定された共有プランが見つかりませんでした。');
+    const { data: row, error } = await pullPlanFromCloud(shareParam);
+    if (error || !row || !row.plan_data) {
+      const errorDetail = error && error.message ? `\nエラー詳細: ${error.message}` : '\nエラー詳細: 該当データ0件（RLSのSELECT許可ポリシーまたはshare_idを確認してください）';
+      window.alert(`指定された共有プランが見つかりませんでした。\n検索したshare_id: ${shareParam}${errorDetail}`);
       return;
     }
 
